@@ -2,6 +2,7 @@ package br.com.easypet.pet.service;
 
 import br.com.easypet.pet.domain.entity.Pet;
 import br.com.easypet.pet.domain.entity.Vaccine;
+import br.com.easypet.pet.domain.model.HistorySource;
 import br.com.easypet.pet.dto.request.VaccineRequest;
 import br.com.easypet.pet.dto.response.VaccineResponse;
 import br.com.easypet.pet.exception.ResourceNotFoundException;
@@ -11,7 +12,6 @@ import br.com.easypet.pet.repository.VaccineRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -33,10 +33,9 @@ public class VaccineService {
     @CacheEvict(value = "vaccines", key = "#p0")
     public VaccineResponse create(UUID petId, VaccineRequest request) {
         log.info("Iniciando cadastro de vacina '{}' para o pet ID: {}", request.name(), petId);
-
         Pet pet = findPetIfOwner(petId);
-        Vaccine vaccine = vaccineMapper.toEntity(request, pet);
-        Vaccine saved =  vaccineRepository.save(vaccine);
+        Vaccine vaccine = vaccineMapper.toEntity(request, pet, resolveSource());
+        Vaccine saved = vaccineRepository.save(vaccine);
         log.info("Vacina cadastrada com sucesso! ID da vacina: {}", saved.getId());
         return vaccineMapper.toResponse(saved);
     }
@@ -44,30 +43,25 @@ public class VaccineService {
     @Transactional(readOnly = true)
     public Page<VaccineResponse> findAllByPet(UUID petId, Pageable pageable) {
         log.info("Buscando histórico de vacinas para o pet ID: {}", petId);
-
         findPetIfOwner(petId);
         return vaccineRepository.findAllByPetIdOrderByApplicationDateDesc(petId, pageable)
                 .map(vaccineMapper::toResponse);
     }
 
     @CacheEvict(value = "vaccines", key = "#p0")
-    public VaccineResponse update(UUID petId,UUID vaccineId, VaccineRequest request) {
+    public VaccineResponse update(UUID petId, UUID vaccineId, VaccineRequest request) {
         log.info("Atualizando vacina ID: {} para o pet ID: {}", vaccineId, petId);
-
-        Pet pet = findPetIfOwner(petId);
+        findPetIfOwner(petId);
         Vaccine vaccine = vaccineRepository.findById(vaccineId)
-                .filter(v-> v.getPet().getId().equals(petId))
-                .orElseThrow(()-> new ResourceNotFoundException("Vacina não encontrada para este pet"));
-
+                .filter(v -> v.getPet().getId().equals(petId))
+                .orElseThrow(() -> new ResourceNotFoundException("Vacina não encontrada para este pet"));
         updateVaccineFromRequest(vaccine, request);
-
         return vaccineMapper.toResponse(vaccineRepository.save(vaccine));
     }
 
     @CacheEvict(value = "vaccines", key = "#p0")
     public void delete(UUID petId, UUID vaccineId) {
         log.warn("Solicitação de exclusão da vacina ID: {} para o pet ID: {}", vaccineId, petId);
-
         findPetIfOwner(petId);
         vaccineRepository.deleteById(vaccineId);
         log.info("Vacina excluída com sucesso!");
@@ -83,9 +77,12 @@ public class VaccineService {
                 .orElseThrow(() -> new ResourceNotFoundException("Pet não encontrado ou acesso negado"));
     }
 
-    private UUID getCurrentUserId() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return UUID.fromString(authentication.getCredentials().toString());
+    private HistorySource resolveSource() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return HistorySource.OWNER;
+        boolean isPartner = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_PARTNER") || a.getAuthority().equals("ROLE_ADMIN"));
+        return isPartner ? HistorySource.PLATFORM : HistorySource.OWNER;
     }
 
     private void updateVaccineFromRequest(Vaccine vaccine, VaccineRequest request) {

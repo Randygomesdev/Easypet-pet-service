@@ -2,12 +2,12 @@ package br.com.easypet.pet.service;
 
 import br.com.easypet.pet.domain.entity.Appointment;
 import br.com.easypet.pet.domain.entity.Pet;
+import br.com.easypet.pet.domain.model.HistorySource;
 import br.com.easypet.pet.dto.request.AppointmentRequest;
 import br.com.easypet.pet.dto.response.AppointmentResponse;
 import br.com.easypet.pet.exception.ResourceNotFoundException;
 
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -37,7 +37,7 @@ public class AppointmentService {
     public AppointmentResponse create(UUID petId, AppointmentRequest request) {
         log.info("Registrando consulta para o pet ID: {} | Motivo: {}", petId, request.reason());
         Pet pet = findPetIfOwner(petId);
-        Appointment appointment = appointmentMapper.toEntity(request, pet);
+        Appointment appointment = appointmentMapper.toEntity(request, pet, resolveSource());
 
         if (request.weightAtTime() != null) {
             pet.setWeight(request.weightAtTime());
@@ -49,7 +49,7 @@ public class AppointmentService {
 
     @Transactional(readOnly = true)
     public Page<AppointmentResponse> findAllByPet(UUID petId, Pageable pageable) {
-        log.info("Buscando consultas no BANCO para o pet: {} (e salvando no Redis)", petId);
+        log.info("Buscando consultas no BANCO para o pet: {}", petId);
         findPetIfOwner(petId);
         return appointmentRepository.findAllByPetIdOrderByDateDesc(petId, pageable)
                 .map(appointmentMapper::toResponse);
@@ -84,10 +84,14 @@ public class AppointmentService {
                 .orElseThrow(() -> new ResourceNotFoundException("Pet não encontrado ou acesso negado"));
     }
 
-    private UUID getCurrentUserId() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return UUID.fromString(authentication.getCredentials().toString());
+    private HistorySource resolveSource() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return HistorySource.OWNER;
+        boolean isPartner = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_PARTNER") || a.getAuthority().equals("ROLE_ADMIN"));
+        return isPartner ? HistorySource.PLATFORM : HistorySource.OWNER;
     }
+
     private void updateAppointmentFromRequest(Appointment appointment, AppointmentRequest request) {
         appointment.setDate(request.date());
         appointment.setReason(request.reason());
