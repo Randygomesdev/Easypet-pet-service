@@ -2,6 +2,7 @@ package br.com.easypet.pet.service;
 
 import br.com.easypet.pet.domain.entity.Pet;
 import br.com.easypet.pet.domain.entity.Surgery;
+import br.com.easypet.pet.domain.model.HistorySource;
 import br.com.easypet.pet.dto.request.SurgeryRequest;
 import br.com.easypet.pet.dto.response.SurgeryResponse;
 import br.com.easypet.pet.exception.ResourceNotFoundException;
@@ -11,7 +12,6 @@ import br.com.easypet.pet.repository.SurgeryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -34,7 +34,7 @@ public class SurgeryService {
     public SurgeryResponse create(UUID petId, SurgeryRequest request) {
         log.info("Registrando cirurgia '{}' para o pet ID: {}", request.description(), petId);
         Pet pet = findPetIfOwner(petId);
-        Surgery surgery = surgeryMapper.toEntity(request, pet);
+        Surgery surgery = surgeryMapper.toEntity(request, pet, resolveSource());
         return surgeryMapper.toResponse(surgeryRepository.save(surgery));
     }
 
@@ -65,15 +65,20 @@ public class SurgeryService {
 
     @Transactional(readOnly = true)
     private Pet findPetIfOwner(UUID petId) {
-        UUID currentUserId = getCurrentUserId();
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        boolean isPartnerOrAdmin = auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN") || a.getAuthority().equals("ROLE_PARTNER"));
         return petRepository.findById(petId)
-                .filter(p -> p.getOwnerId().equals(currentUserId))
+                .filter(p -> isPartnerOrAdmin || p.getOwnerId().equals(UUID.fromString(auth.getCredentials().toString())))
                 .orElseThrow(() -> new ResourceNotFoundException("Pet não encontrado ou acesso negado"));
     }
 
-    private UUID getCurrentUserId() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return UUID.fromString(authentication.getCredentials().toString());
+    private HistorySource resolveSource() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return HistorySource.OWNER;
+        boolean isPartner = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_PARTNER") || a.getAuthority().equals("ROLE_ADMIN"));
+        return isPartner ? HistorySource.PLATFORM : HistorySource.OWNER;
     }
 
     private void updateSurgeryFromRequest(Surgery surgery, SurgeryRequest request) {

@@ -3,6 +3,7 @@ package br.com.easypet.pet.service;
 import br.com.easypet.pet.domain.entity.Appointment;
 import br.com.easypet.pet.domain.entity.Medication;
 import br.com.easypet.pet.domain.entity.Pet;
+import br.com.easypet.pet.domain.model.HistorySource;
 import br.com.easypet.pet.dto.request.MedicationRequest;
 import br.com.easypet.pet.dto.response.MedicationResponse;
 import br.com.easypet.pet.exception.ResourceNotFoundException;
@@ -13,7 +14,6 @@ import br.com.easypet.pet.repository.PetRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,9 +42,10 @@ public class MedicationService {
             appointment = appointmentRepository.findById(request.appointmentId())
                     .orElseThrow(() -> new ResourceNotFoundException("Consulta não encontrada"));
         }
-        Medication medication = medicationMapper.toEntity(request, pet, appointment);
+        Medication medication = medicationMapper.toEntity(request, pet, appointment, resolveSource());
         return medicationMapper.toResponse(medicationRepository.save(medication));
     }
+
     @Transactional(readOnly = true)
     public List<MedicationResponse> findAllByPet(UUID petId) {
         findPetIfOwner(petId);
@@ -82,9 +83,12 @@ public class MedicationService {
                 .orElseThrow(() -> new ResourceNotFoundException("Pet não encontrado ou acesso negado"));
     }
 
-    private UUID getCurrentUserId() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return UUID.fromString(authentication.getCredentials().toString());
+    private HistorySource resolveSource() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return HistorySource.OWNER;
+        boolean isPartner = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_PARTNER") || a.getAuthority().equals("ROLE_ADMIN"));
+        return isPartner ? HistorySource.PLATFORM : HistorySource.OWNER;
     }
 
     private void updateMedicationFromRequest(Medication medication, MedicationRequest request) {
@@ -96,5 +100,4 @@ public class MedicationService {
         medication.setObservations(request.observations());
         medication.setActive(request.active());
     }
-
 }

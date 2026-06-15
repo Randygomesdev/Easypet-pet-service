@@ -2,6 +2,7 @@ package br.com.easypet.pet.service;
 
 import br.com.easypet.pet.domain.entity.Exam;
 import br.com.easypet.pet.domain.entity.Pet;
+import br.com.easypet.pet.domain.model.HistorySource;
 import br.com.easypet.pet.dto.request.ExamRequest;
 import br.com.easypet.pet.dto.response.ExamResponse;
 import br.com.easypet.pet.exception.ResourceNotFoundException;
@@ -11,7 +12,6 @@ import br.com.easypet.pet.repository.PetRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -34,7 +34,7 @@ public class ExamService {
     public ExamResponse create(UUID petId, ExamRequest request) {
         log.info("Registrando exame '{}' para o pet ID: {}", request.examName(), petId);
         Pet pet = findPetIfOwner(petId);
-        Exam exam = examMapper.toEntity(request, pet);
+        Exam exam = examMapper.toEntity(request, pet, resolveSource());
         return examMapper.toResponse(examRepository.save(exam));
     }
 
@@ -73,9 +73,12 @@ public class ExamService {
                 .orElseThrow(() -> new ResourceNotFoundException("Pet não encontrado ou acesso negado"));
     }
 
-    private UUID getCurrentUserId() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return UUID.fromString(authentication.getCredentials().toString());
+    private HistorySource resolveSource() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return HistorySource.OWNER;
+        boolean isPartner = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_PARTNER") || a.getAuthority().equals("ROLE_ADMIN"));
+        return isPartner ? HistorySource.PLATFORM : HistorySource.OWNER;
     }
 
     private void updateExamFromRequest(Exam exam, ExamRequest request) {

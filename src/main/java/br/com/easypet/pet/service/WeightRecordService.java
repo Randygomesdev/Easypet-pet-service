@@ -2,6 +2,7 @@ package br.com.easypet.pet.service;
 
 import br.com.easypet.pet.domain.entity.Pet;
 import br.com.easypet.pet.domain.entity.WeightRecord;
+import br.com.easypet.pet.domain.model.HistorySource;
 import br.com.easypet.pet.dto.request.WeightRecordRequest;
 import br.com.easypet.pet.dto.response.WeightRecordResponse;
 import br.com.easypet.pet.exception.ResourceNotFoundException;
@@ -11,7 +12,6 @@ import br.com.easypet.pet.repository.WeightRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -30,11 +30,10 @@ public class WeightRecordService {
     private final PetRepository petRepository;
     private final WeightRecordMapper weightRecordMapper;
 
-    //@CacheEvict(value = "weights", key = "#petId")
     public WeightRecordResponse create(UUID petId, WeightRecordRequest request) {
         log.info("Registrando nova pesagem para o pet ID: {}", petId);
         Pet pet = findPetIfOwner(petId);
-        WeightRecord record = weightRecordMapper.toEntity(request, pet);
+        WeightRecord record = weightRecordMapper.toEntity(request, pet, resolveSource());
 
         pet.setWeight(request.weight());
         petRepository.save(pet);
@@ -49,7 +48,6 @@ public class WeightRecordService {
                 .map(weightRecordMapper::toResponse);
     }
 
-    //@CacheEvict(value = "weights", key = "#petId")
     public void delete(UUID petId, UUID recordId) {
         findPetIfOwner(petId);
         weightRecordRepository.deleteById(recordId);
@@ -57,14 +55,19 @@ public class WeightRecordService {
 
     @Transactional(readOnly = true)
     private Pet findPetIfOwner(UUID petId) {
-        UUID currentUserId = getCurrentUserId();
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        boolean isPartnerOrAdmin = auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN") || a.getAuthority().equals("ROLE_PARTNER"));
         return petRepository.findById(petId)
-                .filter(p -> p.getOwnerId().equals(currentUserId))
+                .filter(p -> isPartnerOrAdmin || p.getOwnerId().equals(UUID.fromString(auth.getCredentials().toString())))
                 .orElseThrow(() -> new ResourceNotFoundException("Pet não encontrado ou acesso negado"));
     }
 
-    private UUID getCurrentUserId() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return UUID.fromString(authentication.getCredentials().toString());
+    private HistorySource resolveSource() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return HistorySource.OWNER;
+        boolean isPartner = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_PARTNER") || a.getAuthority().equals("ROLE_ADMIN"));
+        return isPartner ? HistorySource.PLATFORM : HistorySource.OWNER;
     }
 }
